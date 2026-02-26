@@ -65,7 +65,7 @@ func newServeCmd() *cobra.Command {
 			defer boltStore.Close()
 
 			// 4. Create executor and runtime.
-			executor := agent.NewExecutor(logger)
+			executor := agent.NewExecutor(cfg.Agent.ClaudeCLI, logger)
 			runtime := agent.NewRuntime(boltStore, executor, cfg, logger)
 
 			// 5. Create scheduler.

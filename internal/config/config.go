@@ -24,6 +24,7 @@ type StoreConfig struct {
 }
 
 type AgentConfig struct {
+	ClaudeCLI           string // path to claude binary (default: "claude", resolved via PATH)
 	DefaultModel        string // default "claude-sonnet-4-20250514"
 	DefaultMaxTokens    int    // default 8192
 	DefaultTimeout      int    // default 300 (seconds)
@@ -47,6 +48,7 @@ func DefaultConfig() *Config {
 			DataDir: defaultDataDir(),
 		},
 		Agent: AgentConfig{
+			ClaudeCLI:           "claude",
 			DefaultModel:        "claude-sonnet-4-20250514",
 			DefaultMaxTokens:    8192,
 			DefaultTimeout:      300,
