@@ -165,8 +165,17 @@ func (c *DevTaskController) reconcileScheduled(ctx context.Context, key string, 
 		zap.String("pod", pod.Metadata.Name),
 	)
 
+	// Mark as Running immediately to prevent duplicate launches.
+	// Without this, a second reconcile could see the task still in Scheduled
+	// phase and launch another goroutine before the first one writes Running.
+	task.Status.Phase = v1alpha1.TaskRunning
+	task.Status.AssignedPod = pod.Metadata.Name
+	if err := c.store.Update(key, task); err != nil {
+		return fmt.Errorf("marking task %q as Running: %w", task.Metadata.Name, err)
+	}
+
 	// Launch execution in a goroutine.
-	// The runtime handles all phase transitions:
+	// The runtime handles remaining transitions:
 	//   Running -> Succeeded/Failed for the task
 	//   Ready -> Busy -> Ready for the pod
 	go func() {

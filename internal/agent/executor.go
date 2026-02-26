@@ -80,9 +80,6 @@ func (e *Executor) Execute(ctx context.Context, req ExecutionRequest) (*Executio
 		args = append(args, "--system-prompt", req.SystemPrompt)
 	}
 
-	// Limit to a single turn (no tool use / agentic loops).
-	args = append(args, "--max-turns", "1")
-
 	e.logger.Debug("executing claude CLI",
 		zap.String("bin", e.cliBin),
 		zap.String("model", req.Model),
@@ -120,7 +117,7 @@ func (e *Executor) Execute(ctx context.Context, req ExecutionRequest) (*Executio
 		return nil, fmt.Errorf("parsing claude CLI output: %w", err)
 	}
 
-	if resp.IsError {
+	if resp.IsError && resp.Subtype != "error_max_turns" {
 		return nil, fmt.Errorf("claude CLI returned error: %s", resp.Result)
 	}
 

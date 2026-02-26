@@ -209,6 +209,12 @@ func (r *Runtime) ExecuteTask(ctx context.Context, task *v1alpha1.DevTask, pod *
 		task.Metadata.UpdatedAt = finishedAt
 	}
 
+	r.logger.Debug("writing task result to store",
+		zap.String("task", task.Metadata.Name),
+		zap.String("phase", string(task.Status.Phase)),
+		zap.Int("outputLen", len(task.Status.Output)),
+	)
+
 	if storeErr := r.store.Update(taskKey, task); storeErr != nil {
 		return fmt.Errorf("failed to update task status: %w", storeErr)
 	}
