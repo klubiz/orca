@@ -22,7 +22,7 @@ Manage agent pods, pools, and development tasks.`,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			// Skip client init for commands that don't need the API server.
 			name := cmd.Name()
-			if name == "serve" || name == "init" {
+			if name == "serve" || name == "init" || name == "ui" {
 				return
 			}
 			apiClient = client.New(serverAddr)
@@ -44,6 +44,7 @@ Manage agent pods, pools, and development tasks.`,
 		newStatusCmd(),
 		newExecCmd(),
 		newInitCmd(),
+		newUICmd(),
 	)
 
 	return cmd
