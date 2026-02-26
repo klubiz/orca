@@ -66,14 +66,18 @@ func (c *AgentPoolController) Reconcile(ctx context.Context, key string) error {
 		return fmt.Errorf("listing pods for pool %q: %w", pool.Metadata.Name, err)
 	}
 
-	// Filter pods owned by this pool, excluding terminated ones.
+	// Filter pods owned by this pool, excluding terminated/terminating ones.
+	// Terminating pods are already on their way out and should not count
+	// towards the actual replica count for scaling decisions.
 	var ownedPods []*v1alpha1.AgentPod
 	for _, obj := range objects {
 		pod, ok := obj.(*v1alpha1.AgentPod)
 		if !ok {
 			continue
 		}
-		if pod.Spec.OwnerPool == pool.Metadata.Name && pod.Status.Phase != v1alpha1.PodTerminated {
+		if pod.Spec.OwnerPool == pool.Metadata.Name &&
+			pod.Status.Phase != v1alpha1.PodTerminated &&
+			pod.Status.Phase != v1alpha1.PodTerminating {
 			ownedPods = append(ownedPods, pod)
 		}
 	}
@@ -109,11 +113,6 @@ func (c *AgentPoolController) Reconcile(ctx context.Context, key string) error {
 		for _, pod := range ownedPods {
 			if terminated >= toTerminate {
 				break
-			}
-			// Skip pods already terminating.
-			if pod.Status.Phase == v1alpha1.PodTerminating {
-				terminated++
-				continue
 			}
 			// Prefer terminating non-busy pods first.
 			if pod.Status.Phase != v1alpha1.PodBusy {
@@ -179,19 +178,39 @@ func (c *AgentPoolController) Reconcile(ctx context.Context, key string) error {
 		}
 	}
 
-	pool.Status.Replicas = replicas
-	pool.Status.ReadyReplicas = ready
-	pool.Status.BusyReplicas = busy
+	// Re-read pool from store to pick up any Spec changes (e.g. scale API)
+	// that occurred while we were reconciling. Only update Status on the fresh copy.
+	var freshPool v1alpha1.AgentPool
+	if err := c.store.Get(key, &freshPool); err != nil {
+		if err == store.ErrNotFound {
+			return nil
+		}
+		return fmt.Errorf("re-reading pool %q for status update: %w", pool.Metadata.Name, err)
+	}
 
-	if err := c.store.Update(key, &pool); err != nil {
+	// Only write if status actually changed to avoid an infinite event loop
+	// (each Update triggers a MODIFIED event which re-triggers Reconcile).
+	if freshPool.Status.Replicas == replicas &&
+		freshPool.Status.ReadyReplicas == ready &&
+		freshPool.Status.BusyReplicas == busy {
+		return nil
+	}
+
+	freshPool.Status.Replicas = replicas
+	freshPool.Status.ReadyReplicas = ready
+	freshPool.Status.BusyReplicas = busy
+
+	if err := c.store.Update(key, &freshPool); err != nil {
 		return fmt.Errorf("updating pool %q status: %w", pool.Metadata.Name, err)
 	}
 
 	return nil
 }
 
-// reconcileFromPodEvent handles AgentPod events by finding the owner pool and reconciling it.
-func (c *AgentPoolController) reconcileFromPodEvent(_ context.Context, podKey string) error {
+// reconcileFromPodEvent handles AgentPod events by finding the owner pool
+// and delegating to the main Reconcile method. This avoids a TOCTOU race
+// where a separate read-modify-write could overwrite Spec changes (e.g. replicas).
+func (c *AgentPoolController) reconcileFromPodEvent(ctx context.Context, podKey string) error {
 	var pod v1alpha1.AgentPod
 	if err := c.store.Get(podKey, &pod); err != nil {
 		if err == store.ErrNotFound {
@@ -202,42 +221,10 @@ func (c *AgentPoolController) reconcileFromPodEvent(_ context.Context, podKey st
 	if pod.Spec.OwnerPool == "" {
 		return nil // Standalone pod, not managed by a pool.
 	}
-	// Reconcile the owner pool.
+	// Delegate to the main Reconcile with the pool key so that
+	// scale up/down and status update happen atomically on the latest state.
 	poolKey := store.ResourceKey(v1alpha1.KindAgentPool, pod.Metadata.Project, pod.Spec.OwnerPool)
-	var pool v1alpha1.AgentPool
-	if err := c.store.Get(poolKey, &pool); err != nil {
-		if err == store.ErrNotFound {
-			return nil
-		}
-		return err
-	}
-	// Update pool status counts only (don't trigger scale up/down from pod events).
-	prefix := fmt.Sprintf("/%s/%s/", v1alpha1.KindAgentPod, pool.Metadata.Project)
-	objects, err := c.store.List(prefix, func() interface{} { return &v1alpha1.AgentPod{} })
-	if err != nil {
-		return err
-	}
-	var replicas, ready, busy int
-	for _, obj := range objects {
-		p, ok := obj.(*v1alpha1.AgentPod)
-		if !ok || p.Spec.OwnerPool != pool.Metadata.Name {
-			continue
-		}
-		if p.Status.Phase == v1alpha1.PodTerminated || p.Status.Phase == v1alpha1.PodTerminating {
-			continue
-		}
-		replicas++
-		switch p.Status.Phase {
-		case v1alpha1.PodReady:
-			ready++
-		case v1alpha1.PodBusy:
-			busy++
-		}
-	}
-	pool.Status.Replicas = replicas
-	pool.Status.ReadyReplicas = ready
-	pool.Status.BusyReplicas = busy
-	return c.store.Update(poolKey, &pool)
+	return c.Reconcile(ctx, poolKey)
 }
 
 // createPod creates a new AgentPod from the pool's template.

@@ -30,23 +30,28 @@ const (
 )
 
 // WorkQueue is a rate-limited work queue with exponential backoff.
+// It uses the K8s pattern of dirty/processing sets to ensure no events
+// are lost while an item is being processed.
 type WorkQueue struct {
-	mu     sync.Mutex
-	items  []workItem
-	dirty  map[string]bool // items currently queued
-	notify chan struct{}
-	closed bool
+	mu         sync.Mutex
+	items      []workItem
+	dirty      map[string]bool // items queued or needing re-queue
+	processing map[string]bool // items currently being processed
+	notify     chan struct{}
+	closed     bool
 }
 
 // NewWorkQueue creates a new work queue.
 func NewWorkQueue() *WorkQueue {
 	return &WorkQueue{
-		dirty:  make(map[string]bool),
-		notify: make(chan struct{}, 1),
+		dirty:      make(map[string]bool),
+		processing: make(map[string]bool),
+		notify:     make(chan struct{}, 1),
 	}
 }
 
-// Add enqueues an item, deduplicated by key.
+// Add enqueues an item. If the item is currently being processed,
+// it marks it dirty so it will be re-queued when Done() is called.
 func (q *WorkQueue) Add(key string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -55,11 +60,20 @@ func (q *WorkQueue) Add(key string) {
 		return
 	}
 
-	if q.dirty[key] {
+	// Mark as dirty. If it's currently being processed, Done() will re-queue it.
+	q.dirty[key] = true
+
+	// If already in the queue or being processed, don't add a duplicate item.
+	if q.processing[key] {
 		return
 	}
+	// Check if already in items.
+	for _, item := range q.items {
+		if item.key == key {
+			return
+		}
+	}
 
-	q.dirty[key] = true
 	q.items = append(q.items, workItem{
 		key:       key,
 		attempts:  0,
@@ -91,6 +105,8 @@ func (q *WorkQueue) Get() (string, bool) {
 				key := item.key
 				// Remove from the items slice.
 				q.items = append(q.items[:i], q.items[i+1:]...)
+				// Mark as processing.
+				q.processing[key] = true
 				q.mu.Unlock()
 				return key, true
 			}
@@ -128,11 +144,29 @@ func (q *WorkQueue) Get() (string, bool) {
 	}
 }
 
-// Done marks an item as done, removing it from the dirty set.
+// Done marks an item as done. If the item was re-dirtied during processing
+// (i.e., a new event arrived while it was being reconciled), it is re-queued.
 func (q *WorkQueue) Done(key string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	delete(q.dirty, key)
+
+	delete(q.processing, key)
+
+	// If the key was re-dirtied while processing, re-add it to the queue.
+	if q.dirty[key] {
+		delete(q.dirty, key)
+		// Re-add as a fresh item.
+		q.dirty[key] = true
+		q.items = append(q.items, workItem{
+			key:       key,
+			attempts:  0,
+			nextRetry: time.Time{},
+		})
+		select {
+		case q.notify <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // Requeue re-adds an item with exponential backoff (1s, 2s, 4s, ..., max 60s).
@@ -144,16 +178,8 @@ func (q *WorkQueue) Requeue(key string) {
 		return
 	}
 
-	// Find the current attempt count for this key or default to 0.
+	// Find the current attempt count for this key.
 	attempts := 0
-	// Check if it was previously tracked; if Done was called, dirty is cleared,
-	// so we need to look at existing items. Since Done removes from dirty,
-	// a requeue effectively starts a fresh entry.
-	// We track attempts within the item itself.
-	// For requeue, we increment attempt count.
-	// Since the item was removed from items in Get(), we need to re-add.
-
-	// Remove any existing entry for this key (shouldn't be there after Get, but be safe).
 	for i, item := range q.items {
 		if item.key == key {
 			attempts = item.attempts
@@ -168,6 +194,8 @@ func (q *WorkQueue) Requeue(key string) {
 		backoff = maxBackoff
 	}
 
+	// Remove from processing since we're re-adding.
+	delete(q.processing, key)
 	q.dirty[key] = true
 	q.items = append(q.items, workItem{
 		key:       key,
@@ -175,7 +203,6 @@ func (q *WorkQueue) Requeue(key string) {
 		nextRetry: time.Now().Add(backoff),
 	})
 
-	// Non-blocking notify.
 	select {
 	case q.notify <- struct{}{}:
 	default:
@@ -315,9 +342,9 @@ func (m *Manager) workerLoop(ctx context.Context, controllerName string, reconci
 				zap.Error(err),
 			)
 			queue.Requeue(key)
+		} else {
+			queue.Done(key)
 		}
-
-		queue.Done(key)
 	}
 }
 
