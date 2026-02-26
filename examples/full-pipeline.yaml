@@ -1,0 +1,74 @@
+apiVersion: orca.dev/v1alpha1
+kind: Project
+metadata:
+  name: demo-app
+spec:
+  description: "Demo Application"
+  path: "/workspace/demo-app"
+---
+apiVersion: orca.dev/v1alpha1
+kind: AgentPool
+metadata:
+  name: dev-team
+  project: demo-app
+spec:
+  replicas: 2
+  selector:
+    role: developer
+  template:
+    metadata:
+      labels:
+        role: developer
+    spec:
+      model: claude-sonnet
+      capabilities:
+        - code
+        - test
+        - review
+      maxConcurrency: 2
+      maxTokens: 8192
+      tools:
+        - read_file
+        - write_file
+        - run_command
+      restartPolicy: Always
+---
+apiVersion: orca.dev/v1alpha1
+kind: DevTask
+metadata:
+  name: design-schema
+  project: demo-app
+spec:
+  prompt: "Design the database schema for a user management system with roles and permissions."
+  requiredCapabilities:
+    - code
+  maxRetries: 2
+  timeoutSeconds: 180
+---
+apiVersion: orca.dev/v1alpha1
+kind: DevTask
+metadata:
+  name: implement-models
+  project: demo-app
+spec:
+  prompt: "Implement the Go models and repository layer based on the database schema."
+  requiredCapabilities:
+    - code
+  dependsOn:
+    - design-schema
+  maxRetries: 3
+  timeoutSeconds: 300
+---
+apiVersion: orca.dev/v1alpha1
+kind: DevTask
+metadata:
+  name: write-tests
+  project: demo-app
+spec:
+  prompt: "Write comprehensive unit tests for all models and repository methods."
+  requiredCapabilities:
+    - test
+  dependsOn:
+    - implement-models
+  maxRetries: 2
+  timeoutSeconds: 300

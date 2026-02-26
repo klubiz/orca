@@ -1,0 +1,31 @@
+apiVersion: orca.dev/v1alpha1
+kind: AgentPool
+metadata:
+  name: coding-team
+  project: my-erp
+spec:
+  replicas: 3
+  selector:
+    role: coder
+  template:
+    metadata:
+      labels:
+        role: coder
+        managed-by: coding-team
+    spec:
+      model: claude-sonnet
+      systemPrompt: |
+        You are a skilled developer working on an ERP system.
+        Write clean, well-tested code following Go best practices.
+      capabilities:
+        - code
+        - test
+        - debug
+      maxConcurrency: 2
+      maxTokens: 8192
+      tools:
+        - read_file
+        - write_file
+        - run_command
+        - search_code
+      restartPolicy: Always

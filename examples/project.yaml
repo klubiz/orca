@@ -1,0 +1,7 @@
+apiVersion: orca.dev/v1alpha1
+kind: Project
+metadata:
+  name: my-erp
+spec:
+  description: "ERP System Development Project"
+  path: "/workspace/my-erp"

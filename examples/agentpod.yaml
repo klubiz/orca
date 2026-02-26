@@ -1,0 +1,24 @@
+apiVersion: orca.dev/v1alpha1
+kind: AgentPod
+metadata:
+  name: coder-alpha
+  project: my-erp
+  labels:
+    role: coder
+    team: backend
+spec:
+  model: claude-sonnet
+  systemPrompt: |
+    You are an expert Go developer. You write clean, idiomatic Go code
+    with proper error handling and tests.
+  capabilities:
+    - code
+    - refactor
+    - debug
+  maxConcurrency: 3
+  maxTokens: 8192
+  tools:
+    - read_file
+    - write_file
+    - run_command
+  restartPolicy: Always

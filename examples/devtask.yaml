@@ -1,0 +1,19 @@
+apiVersion: orca.dev/v1alpha1
+kind: DevTask
+metadata:
+  name: implement-customer-search
+  project: my-erp
+spec:
+  prompt: |
+    Implement a customer search feature for the ERP system.
+
+    Requirements:
+    1. Add a search endpoint GET /api/v1/customers/search
+    2. Support searching by name and email
+    3. Add pagination support
+    4. Write unit tests
+  requiredCapabilities:
+    - code
+    - test
+  maxRetries: 3
+  timeoutSeconds: 300
